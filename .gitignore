@@ -1,0 +1,6 @@
+/packages/
+.vs/
+x64/
+~AutoRecover.*.vcxproj
+src/clientversion.cpp
+export-subst
