@@ -208,6 +208,9 @@ iteration:
             assets[*ownershipIndex].varStruct.ownership.managingContractIndex = managingContractIndex;
             assets[*ownershipIndex].varStruct.ownership.issuanceIndex = *issuanceIndex;
             assets[*ownershipIndex].varStruct.ownership.numberOfShares = numberOfShares;
+            assets[*ownershipIndex].varStruct.ownership.numberOfSharesOwned = numberOfSharesOwned;
+            assets[*ownershipIndex].varStruct.ownership.numberOfSharesLocked = numberOfSharesLocked;
+            assets[*ownershipIndex].varStruct.ownership.numberOfSharesReserved = numberOfSharesReserved;
 
             *possessionIndex = (*ownershipIndex + 1) & (ASSETS_CAPACITY - 1);
         iteration3:
@@ -344,6 +347,7 @@ iteration:
             assetPossessionChange.destinationPublicKey = destinationPublicKey;
             assetPossessionChange.issuerPublicKey = assets[assets[sourceOwnershipIndex].varStruct.ownership.issuanceIndex].varStruct.issuance.publicKey;
             assetPossessionChange.numberOfShares = numberOfShares;
+            assetPossessionChange.name = assets[assets[sourceOwnershipIndex].varStruct.ownership.issuanceIndex].varStruct.issuance.name; // Order must be preserved!
             *((unsigned long long*) & assetPossessionChange.name) = *((unsigned long long*) & assets[assets[sourceOwnershipIndex].varStruct.ownership.issuanceIndex].varStruct.issuance.name); // Order must be preserved!
             assetPossessionChange.numberOfDecimalPlaces = assets[assets[sourceOwnershipIndex].varStruct.ownership.issuanceIndex].varStruct.issuance.numberOfDecimalPlaces; // Order must be preserved!
             *((unsigned long long*) & assetPossessionChange.unitOfMeasurement) = *((unsigned long long*) & assets[assets[sourceOwnershipIndex].varStruct.ownership.issuanceIndex].varStruct.issuance.unitOfMeasurement); // Order must be preserved!
