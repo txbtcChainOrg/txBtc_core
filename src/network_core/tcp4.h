@@ -3,7 +3,8 @@
 #include "platform/uefi.h"
 #include "platform/console_logging.h"
 
-#include "network.h"
+#include "network/header.h"
+
 
 // Must be 2 * RequestResponseHeader::max_size (maximum message size) because
 // double buffering is used to avoid waiting
@@ -51,7 +52,6 @@ static EFI_HANDLE getTcp4Protocol(const unsigned char* remoteAddress, const unsi
                 *((int*)configData.AccessPoint.RemoteAddress.Addr) = *((int*)remoteAddress);
                 configData.AccessPoint.RemotePort = port;
                 configData.AccessPoint.ActiveFlag = TRUE;
-
             }
             EFI_TCP4_OPTION option;
             bs->SetMem(&option, sizeof(option), 0);
@@ -126,7 +126,6 @@ static EFI_HANDLE getTcp4Protocol(const unsigned char* remoteAddress, const unsi
                                 appendIPv4Address(message, modeData.RouteTable[i].GatewayAddress);
                                 appendText(message, L".");
                                 logToConsole(message);
-
                             }
                         }
 
@@ -158,9 +157,7 @@ static bool initTcp4(unsigned short local_port)
 
 static void deinitTcp4()
 {
-    
     bs->CloseProtocol(peerChildHandle, &tcp4ProtocolGuid, ih, NULL);
     tcp4ServiceBindingProtocol->DestroyChild(tcp4ServiceBindingProtocol, peerChildHandle);
-
 }
 

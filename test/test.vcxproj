@@ -59,7 +59,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="m256.cpp" />
-    <ClCompile Include="network_messages.cpp" />
+    <ClCompile Include="network.cpp" />
     <ClCompile Include="qpi.cpp" />
     <ClCompile Include="score.cpp" />
   </ItemGroup>

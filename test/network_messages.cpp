@@ -1,6 +1,6 @@
 #include "gtest/gtest.h"
 
-#include "../src/network_messages.h"
+#include "../src/network.h"
 
 TEST(TestCoreRequestResponseHeader, TestSize) {
     RequestResponseHeader hdr;

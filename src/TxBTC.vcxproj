@@ -16,7 +16,7 @@
   <ItemGroup>
     <ClInclude Include="assets.h" />
     <ClInclude Include="logging.h" />
-    <ClInclude Include="network_messages.h" />
+    <ClInclude Include="network.h" />
     <ClInclude Include="peers.h" />
     <ClInclude Include="platform\algorithm.h" />
     <ClInclude Include="platform\concurrency.h" />

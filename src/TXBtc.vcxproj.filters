@@ -45,7 +45,7 @@
     <ClInclude Include="platform\time_stamp_counter.h">
       <Filter>platform</Filter>
     </ClInclude>
-    <ClInclude Include="network_messages.h" />
+    <ClInclude Include="network.h" />
     <ClInclude Include="tcp4.h" />
     <ClInclude Include="peers.h" />
     <ClInclude Include="platform\random.h">

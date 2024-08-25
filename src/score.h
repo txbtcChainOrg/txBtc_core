@@ -3,12 +3,11 @@
 #include "platform/memory.h"
 #include "platform/m256.h"
 #include "platform/concurrency.h"
-#include "platform/file_io.h"
-#include "platform/console_logging.h"
-#include "platform/time_stamp_counter.h"
-#include "platform/algorithm.h"
-#include "kangaroo_twelve.h"
+#include "smart_contracts/math_lib.h"
 #include "public_settings.h"
+
+#include "score_cache.h"
+
 ////////// Scoring algorithm \\\\\\\\\\
 
 template<
@@ -18,12 +17,15 @@ template<
     unsigned int numberOfOutputNeurons,
     unsigned int maxInputDuration,
     unsigned int maxOutputDuration,
-    unsigned int maxNumberOfProcessors,
-    unsigned int solutionBufferCount = 8
+    unsigned int solutionBufferCount
 >
 struct ScoreFunction
 {
     int miningData[dataLength];
+    m256i initialRandomSeed;
+
+#pragma warning(push)
+#pragma warning(disable:4293)
     //need 2 set of variables for input and output
     static constexpr unsigned int SYNAPSE_CHUNK_SIZE_INPUT = (dataLength + numberOfInputNeurons + infoLength);
     static constexpr unsigned int SYNAPSE_CHUNK_SIZE_INPUT_BIT = (SYNAPSE_CHUNK_SIZE_INPUT + 7) >> 3;
@@ -40,6 +42,7 @@ struct ScoreFunction
     static constexpr unsigned int LAST_ELEMENT_BIT_OUTPUT = (dataLength + numberOfOutputNeurons + infoLength) & 63;
     static constexpr unsigned long long LAST_ELEMENT_MASK_OUTPUT = LAST_ELEMENT_BIT_OUTPUT == 0 ?
         0xFFFFFFFFFFFFFFFFULL : (0xFFFFFFFFFFFFFFFFULL >> (64 - LAST_ELEMENT_BIT_OUTPUT));
+#pragma warning(pop)
 
     struct
     {
@@ -50,7 +53,7 @@ struct ScoreFunction
     {
         char input[(numberOfInputNeurons + infoLength) * (dataLength + numberOfInputNeurons + infoLength)];
         char output[(numberOfOutputNeurons + dataLength) * (infoLength + numberOfOutputNeurons + dataLength)];
-        unsigned short lengths[maxInputDuration * (numberOfInputNeurons + infoLength) + MAX_OUTPUT_DURATION * (numberOfOutputNeurons + dataLength)];
+        unsigned short lengths[maxInputDuration * (numberOfInputNeurons + infoLength) + maxOutputDuration * (numberOfOutputNeurons + dataLength)];
     } synapses[solutionBufferCount];
 
     struct
@@ -64,102 +67,20 @@ struct ScoreFunction
     volatile char solutionEngineLock[solutionBufferCount];
 
 #if USE_SCORE_CACHE
-    struct
-    {
-        m256i publicKey;
-        m256i nonce;
-        int score;
-    } scoreCache[SCORE_CACHE_SIZE]; // set zero or load from a file on init
-
-    volatile char scoreCacheLock;
-
-    unsigned int scoreCacheHit = 0;
-    unsigned int scoreCacheMiss = 0;
-    unsigned int scoreCacheUnknown = 0;
-
-    unsigned int getScoreCacheIndex(const m256i& publicKey, const m256i& nonce)
-    {
-        m256i buffer[2] = { publicKey, nonce };
-        unsigned char digest[32];
-        KangarooTwelve64To32(buffer, digest);
-        unsigned int result = *((unsigned long long*)digest) % SCORE_CACHE_SIZE;
-
-        return result;
-    }
-
-    int tryFetchingScoreCache(const m256i& publicKey, const m256i& nonce, unsigned int scoreCacheIndex)
-    {
-        ACQUIRE(scoreCacheLock);
-        const m256i& cachedPublicKey = scoreCache[scoreCacheIndex].publicKey;
-        const m256i& cachedNonce = scoreCache[scoreCacheIndex].nonce;
-        int retVal;
-        if (isZero(cachedPublicKey))
-        {
-            scoreCacheUnknown++;
-            retVal = -1;
-        }
-        else if (cachedPublicKey == publicKey && cachedNonce == nonce)
-        {
-            scoreCacheHit++;
-            retVal = scoreCache[scoreCacheIndex].score;
-        }
-        else
-        {
-            scoreCacheMiss++;
-            retVal = -1;
-        }
-        RELEASE(scoreCacheLock);
-        return retVal;
-    }
-
-    void addScoreCache(const m256i& publicKey, const m256i& nonce, unsigned int scoreCacheIndex, int score)
-    {
-        ACQUIRE(scoreCacheLock);
-        scoreCache[scoreCacheIndex].publicKey = publicKey;
-        scoreCache[scoreCacheIndex].nonce = nonce;
-        scoreCache[scoreCacheIndex].score = score;
-        RELEASE(scoreCacheLock);
-    }
-
-    void initEmptyScoreCache()
-    {
-        ACQUIRE(scoreCacheLock);
-        setMem((unsigned char*)scoreCache, sizeof(scoreCache), 0);
-        RELEASE(scoreCacheLock);
-    }
+    ScoreCache<SCORE_CACHE_SIZE, SCORE_CACHE_COLLISION_RETRIES> scoreCache;
 #endif
 
-    void initMiningData()
+    void initMiningData(m256i randomSeed)
     {
-        unsigned char randomSeed[32];
-        setMem(randomSeed, 32, 0);
-        randomSeed[0] = RANDOM_SEED0;
-        randomSeed[1] = RANDOM_SEED1;
-        randomSeed[2] = RANDOM_SEED2;
-        randomSeed[3] = RANDOM_SEED3;
-        randomSeed[4] = RANDOM_SEED4;
-        randomSeed[5] = RANDOM_SEED5;
-        randomSeed[6] = RANDOM_SEED6;
-        randomSeed[7] = RANDOM_SEED7;
-        random(randomSeed, randomSeed, (unsigned char*)miningData, sizeof(miningData));
+        initialRandomSeed = randomSeed; // persist the initial random seed to be able to sned it back on system info response
+        random((unsigned char*)&randomSeed, (unsigned char*)&randomSeed, (unsigned char*)miningData, sizeof(miningData));
     }
 
     // Save score cache to SCORE_CACHE_FILE_NAME
     void saveScoreCache()
     {
 #if USE_SCORE_CACHE
-        const unsigned long long beginningTick = __rdtsc();
-        ACQUIRE(scoreCacheLock);
-        long long savedSize = save(SCORE_CACHE_FILE_NAME, sizeof(scoreCache), (unsigned char*)&scoreCache);
-        RELEASE(scoreCacheLock);
-        if (savedSize == sizeof(scoreCache))
-        {
-            setNumber(message, savedSize, TRUE);
-            appendText(message, L" bytes of the score cache data are saved (");
-            appendNumber(message, (__rdtsc() - beginningTick) * 1000000 / frequency, TRUE);
-            appendText(message, L" microseconds).");
-            logToConsole(message);
-        }
+        scoreCache.save(SCORE_CACHE_FILE_NAME);
 #endif
     }
 
@@ -168,37 +89,10 @@ struct ScoreFunction
     {
         bool success = true;
 #if USE_SCORE_CACHE
-        setText(message, L"Loading score cache...");
-        logToConsole(message);
         SCORE_CACHE_FILE_NAME[sizeof(SCORE_CACHE_FILE_NAME) / sizeof(SCORE_CACHE_FILE_NAME[0]) - 4] = epoch / 100 + L'0';
         SCORE_CACHE_FILE_NAME[sizeof(SCORE_CACHE_FILE_NAME) / sizeof(SCORE_CACHE_FILE_NAME[0]) - 3] = (epoch % 100) / 10 + L'0';
         SCORE_CACHE_FILE_NAME[sizeof(SCORE_CACHE_FILE_NAME) / sizeof(SCORE_CACHE_FILE_NAME[0]) - 2] = epoch % 10 + L'0';
-        // init, set zero all scorecache
-        initEmptyScoreCache();
-        ACQUIRE(scoreCacheLock);
-        long long loadedSize = load(SCORE_CACHE_FILE_NAME, sizeof(scoreCache), (unsigned char*)scoreCache);
-        RELEASE(scoreCacheLock);
-        if (loadedSize != sizeof(scoreCache))
-        {
-            if (loadedSize == -1)
-            {
-                setText(message, L"Error while loading score cache: File does not exists (ignore this error if this is the epoch start)");
-            }
-            else if (loadedSize < sizeof(scoreCache))
-            {
-                setText(message, L"Error while loading score cache: Score cache file is smaller than defined. System may not work properly");
-            }
-            else
-            {
-                setText(message, L"Error while loading score cache: Score cache file is larger than defined. System may not work properly");
-            }
-            success = false;
-        }
-        else
-        {
-            setText(message, L"Loaded score cache data!");
-        }
-        logToConsole(message);
+        success = scoreCache.load(SCORE_CACHE_FILE_NAME);
 #endif
         return success;
     }
@@ -229,9 +123,9 @@ struct ScoreFunction
     {
         int score = 0;
 #if USE_SCORE_CACHE
-        unsigned int scoreCacheIndex = getScoreCacheIndex(publicKey, nonce);
-        score = tryFetchingScoreCache(publicKey, nonce, scoreCacheIndex);
-        if (score != -1)
+        unsigned int scoreCacheIndex = scoreCache.getCacheIndex(publicKey, nonce);
+        score = scoreCache.tryFetching(publicKey, nonce, scoreCacheIndex);
+        if (score >= scoreCache.MIN_VALID_SCORE)
         {
             return score;
         }
@@ -241,7 +135,7 @@ struct ScoreFunction
         const unsigned long long solutionBufIdx = processor_Number % solutionBufferCount;
         ACQUIRE(solutionEngineLock[solutionBufIdx]);
 
-        unsigned char nrVal1Bit[std::max(PADDED_SYNAPSE_CHUNK_SIZE_OUTPUT_BIT, PADDED_SYNAPSE_CHUNK_SIZE_INPUT_BIT)];
+        unsigned char nrVal1Bit[math_lib::max(PADDED_SYNAPSE_CHUNK_SIZE_OUTPUT_BIT, PADDED_SYNAPSE_CHUNK_SIZE_INPUT_BIT)];
         random(publicKey.m256i_u8, nonce.m256i_u8, (unsigned char*)&synapses[solutionBufIdx], sizeof(synapses[0]));
         for (unsigned int inputNeuronIndex = 0; inputNeuronIndex < numberOfInputNeurons + infoLength; inputNeuronIndex++)
         {
@@ -295,7 +189,7 @@ struct ScoreFunction
             }
         }
 
-        for (unsigned int tick = 0; tick < MAX_INPUT_DURATION; tick++)
+        for (unsigned int tick = 0; tick < maxInputDuration; tick++)
         {
             unsigned short neuronIndices[numberOfInputNeurons + infoLength];
             unsigned short numberOfRemainingNeurons = 0;
@@ -351,7 +245,7 @@ struct ScoreFunction
                 clearBitNeuron(nrVal1Bit, i);
             }
         }
-        for (unsigned int tick = 0; tick < MAX_OUTPUT_DURATION; tick++)
+        for (unsigned int tick = 0; tick < maxOutputDuration; tick++)
         {
             unsigned short neuronIndices[numberOfOutputNeurons + dataLength];
             unsigned short numberOfRemainingNeurons = 0;
@@ -407,8 +301,104 @@ struct ScoreFunction
         }
         RELEASE(solutionEngineLock[solutionBufIdx]);
 #if USE_SCORE_CACHE
-        addScoreCache(publicKey, nonce, scoreCacheIndex, score);
+        scoreCache.addEntry(publicKey, nonce, scoreCacheIndex, score);
 #endif
         return score;
+    }
+
+    
+    volatile char taskQueueLock = 0;
+    struct {
+        m256i publicKey[NUMBER_OF_TRANSACTIONS_PER_TICK];
+        m256i nonce[NUMBER_OF_TRANSACTIONS_PER_TICK];
+    } taskQueue;
+    unsigned int _nTask;
+    unsigned int _nProcessing;
+    unsigned int _nFinished;
+    bool _nIsTaskQueueReady;
+
+    void resetTaskQueue()
+    {
+        ACQUIRE(taskQueueLock);
+        _nTask = 0;
+        _nProcessing = 0;
+        _nFinished = 0;
+        _nIsTaskQueueReady = false;
+        RELEASE(taskQueueLock);
+    }
+
+    // add task to the queue
+    // queue size is limited at NUMBER_OF_TRANSACTIONS_PER_TICK 
+    void addTask(m256i publicKey, m256i nonce)
+    {   
+        ACQUIRE(taskQueueLock);
+        if (_nTask < NUMBER_OF_TRANSACTIONS_PER_TICK)
+        {
+            unsigned int index = _nTask++;
+            taskQueue.publicKey[index] = publicKey;
+            taskQueue.nonce[index] = nonce;
+        }
+        RELEASE(taskQueueLock);
+    }
+
+    void startProcessTaskQueue()
+    {
+        ACQUIRE(taskQueueLock);
+        _nIsTaskQueueReady = true;
+        RELEASE(taskQueueLock);
+    }
+
+    void stopProcessTaskQueue()
+    {
+        ACQUIRE(taskQueueLock);
+        _nIsTaskQueueReady = false;
+        RELEASE(taskQueueLock);
+    }
+
+    // get a task, can call on any thread
+    bool getTask(m256i* publicKey, m256i* nonce)
+    {
+        if (!_nIsTaskQueueReady)
+        {
+            return false;
+        }
+        bool result = false;
+        ACQUIRE(taskQueueLock);
+        if (_nProcessing < _nTask)
+        {
+            unsigned int index = _nProcessing++;
+            *publicKey = taskQueue.publicKey[index];
+            *nonce = taskQueue.nonce[index];
+            result = true;
+        }
+        else
+        {
+            result = false;
+        }
+        RELEASE(taskQueueLock);
+        return result;
+    }
+    void finishTask()
+    {
+        ACQUIRE(taskQueueLock);
+        _nFinished++;
+        RELEASE(taskQueueLock);
+    }
+
+    bool isTaskQueueProcessed()
+    {
+        return _nFinished == _nTask;
+    }
+
+    void tryProcessSolution(unsigned long long processorNumber)
+    {
+        m256i publicKey;
+        m256i nonce;
+        bool res = this->getTask(&publicKey, &nonce);
+        if (res)
+        {
+            (*this)(processorNumber, publicKey, nonce);
+            this->finishTask();
+        }
     }
 };
